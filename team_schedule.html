@@ -421,7 +421,12 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script>
+    const SUPABASE_URL = "https://zoczkgrrjcabgcztcnus.supabase.co";
+    const SUPABASE_PUBLISHABLE_KEY = sb_publishable_kQd-I3qy7xI2qLggBb1xeA_pfKIydfm;
+    const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+
     const calendarEl = document.getElementById("calendar");
     const monthLabel = document.getElementById("monthLabel");
     const yearLabel = document.getElementById("yearLabel");
@@ -485,34 +490,22 @@
       });
     };
 
-    allDayInput.addEventListener("change", () => {
-      setAllDay(allDayInput.checked);
-    });
+    allDayInput.addEventListener("change", () => setAllDay(allDayInput.checked));
 
     let current = new Date();
     current.setDate(1);
 
-    const STORAGE_VERSION = "2";
+    const loadEvents = async () => {
+      const { data, error } = await supabaseClient
+        .from("events")
+        .select("*");
 
-    const migrateStorage = () => {
-      const version = localStorage.getItem("scheduleVersion");
-      if (version !== STORAGE_VERSION) {
-        localStorage.removeItem("teamSchedule");
-        localStorage.setItem("scheduleVersion", STORAGE_VERSION);
-      }
-    };
-
-    const loadEvents = () => {
-      try {
-        return JSON.parse(localStorage.getItem("teamSchedule") || "[]");
-      } catch {
+      if (error) {
+        console.error(error);
+        alert("일정 데이터를 불러오지 못했습니다. Supabase 연결 설정을 확인해 주세요.");
         return [];
       }
-    };
-
-
-    const saveEvents = (events) => {
-      localStorage.setItem("teamSchedule", JSON.stringify(events));
+      return data || [];
     };
 
     const formatDate = (d) => {
@@ -540,7 +533,7 @@
       return `${d.getMonth() + 1}/${d.getDate()}(${weekNames[d.getDay()]})`;
     };
 
-    const renderCalendar = () => {
+    const renderCalendar = async () => {
       const year = current.getFullYear();
       const month = current.getMonth();
       monthLabel.textContent = `${year}년 ${month + 1}월 교육장 사용 일정표`;
@@ -552,7 +545,7 @@
       const prevMonthLastDate = new Date(year, month, 0).getDate();
 
       calendarEl.innerHTML = "";
-      const events = loadEvents();
+      const events = await loadEvents();
 
       for (let i = 0; i < 42; i++) {
         const dayCell = document.createElement("div");
@@ -566,14 +559,13 @@
           cellDate = new Date(year, month - 1, dateNumber);
         } else if (dateNumber > lastDate) {
           dayCell.classList.add("muted");
-          dateNumber = dateNumber - lastDate;
+          dateNumber -= lastDate;
           cellDate = new Date(year, month + 1, dateNumber);
         } else {
           cellDate = new Date(year, month, dateNumber);
         }
 
         const dayIndex = cellDate.getDay();
-
         const label = document.createElement("div");
         label.className = "day-number";
         if (dayIndex === 0) label.classList.add("sun");
@@ -583,8 +575,8 @@
 
         const dayKey = formatDate(cellDate);
         const dayEvents = events
-          .filter(e => e.days.includes(dayKey))
-          .sort((a, b) => timeOrder(a.time) - timeOrder(b.time));
+          .filter(e => Array.isArray(e.days) && e.days.includes(dayKey))
+          .sort((a, b) => timeOrder(a.time || []) - timeOrder(b.time || []));
 
         dayEvents.forEach(e => {
           const chip = document.createElement("div");
@@ -593,42 +585,33 @@
           chip.style.background = colors.bg;
           chip.style.borderColor = colors.border;
           chip.style.color = colors.text;
-          chip.innerHTML = `<strong>${e.title}</strong><span>${formatTimeLabel(e.time)} · ${e.place}</span>`;
+          chip.innerHTML = `<strong>${e.title}</strong><span>${formatTimeLabel(e.time || [])} · ${e.place}</span>`;
           dayCell.appendChild(chip);
         });
 
         calendarEl.appendChild(dayCell);
       }
 
-      if (!startInput.value) {
-        const today = new Date();
-        startInput.value = formatDate(today);
-      }
+      if (!startInput.value) startInput.value = formatDate(new Date());
     };
 
-    const renderList = () => {
-      const events = loadEvents();
+    const renderList = async () => {
+      const events = await loadEvents();
       eventListEl.innerHTML = "";
 
-      events
-        .sort((a, b) => {
-          const dateSort = a.start.localeCompare(b.start);
-          if (dateSort !== 0) return dateSort;
-          return timeOrder(a.time) - timeOrder(b.time);
-        })
-        .forEach(event => {
-          const item = document.createElement("div");
-          item.className = "list-item";
-          item.innerHTML = `
-            <strong>${event.title}</strong>
-            <div class="meta">${event.start} ~ ${event.end} · ${formatTimeLabel(event.time)} · ${event.place} · 담당 ${event.owner}</div>
-          `;
-          const delBtn = document.createElement("button");
-          delBtn.textContent = "삭제";
-          delBtn.addEventListener("click", () => deleteEvent(event.id));
-          item.appendChild(delBtn);
-          eventListEl.appendChild(item);
-        });
+      events.sort((a, b) => {
+        const dateSort = a.start.localeCompare(b.start);
+        return dateSort !== 0 ? dateSort : timeOrder(a.time || []) - timeOrder(b.time || []);
+      }).forEach(event => {
+        const item = document.createElement("div");
+        item.className = "list-item";
+        item.innerHTML = `<strong>${event.title}</strong><div class="meta">${event.start} ~ ${event.end} · ${formatTimeLabel(event.time || [])} · ${event.place} · 담당 ${event.owner}</div>`;
+        const delBtn = document.createElement("button");
+        delBtn.textContent = "삭제";
+        delBtn.addEventListener("click", () => deleteEvent(event.id));
+        item.appendChild(delBtn);
+        eventListEl.appendChild(item);
+      });
 
       if (events.length === 0) {
         const empty = document.createElement("div");
@@ -638,8 +621,8 @@
       }
     };
 
-    const renderSummary = () => {
-      const events = loadEvents();
+    const renderSummary = async () => {
+      const events = await loadEvents();
       summaryListEl.innerHTML = "";
       if (events.length === 0) {
         const empty = document.createElement("li");
@@ -648,24 +631,24 @@
         return;
       }
 
-      events
-        .sort((a, b) => {
-          const dateSort = a.start.localeCompare(b.start);
-          if (dateSort !== 0) return dateSort;
-          return timeOrder(a.time) - timeOrder(b.time);
-        })
-        .forEach(event => {
-          const li = document.createElement("li");
-          const rangeText = event.start === event.end
-            ? shortDate(event.start)
-            : `${shortDate(event.start)} ~ ${shortDate(event.end)}`;
-          li.innerHTML = `${rangeText} ${event.title} · ${formatTimeLabel(event.time)} · ${event.place}`;
-          summaryListEl.appendChild(li);
-        });
-
+      events.sort((a, b) => {
+        const dateSort = a.start.localeCompare(b.start);
+        return dateSort !== 0 ? dateSort : timeOrder(a.time || []) - timeOrder(b.time || []);
+      }).forEach(event => {
+        const li = document.createElement("li");
+        const rangeText = event.start === event.end ? shortDate(event.start) : `${shortDate(event.start)} ~ ${shortDate(event.end)}`;
+        li.innerHTML = `${rangeText} ${event.title} · ${formatTimeLabel(event.time || [])} · ${event.place}`;
+        summaryListEl.appendChild(li);
+      });
     };
 
-    const addEvent = () => {
+    const refreshAll = async () => {
+      await renderCalendar();
+      await renderList();
+      await renderSummary();
+    };
+
+    const addEvent = async () => {
       const startValue = startInput.value;
       const endValue = endInput.value || startValue;
       const title = titleInput.value.trim();
@@ -690,30 +673,38 @@
         cursor = addDays(cursor, 1);
       }
 
-      const events = loadEvents();
+      const events = await loadEvents();
       const conflict = events.some(event => {
         if (event.place !== place) return false;
-        const overlapDate = event.days.some(day => days.includes(day));
+        const overlapDate = (event.days || []).some(day => days.includes(day));
         if (!overlapDate) return false;
-        return event.time.some(slot => time.includes(slot));
+        return (event.time || []).some(slot => time.includes(slot));
       });
+
       if (conflict) {
         alert("선택한 날짜/시간에 이미 예약이 있습니다. 다른 시간이나 장소를 선택해 주세요.");
         return;
       }
-      events.push({
+
+      const newEvent = {
         id: Date.now(),
         title,
         time,
         place,
         owner,
-        deleteCode,
+        delete_code: deleteCode,
         start: formatDate(start),
         end: formatDate(end),
         days
-      });
+      };
 
-      saveEvents(events);
+      const { error } = await supabaseClient.from("events").insert([newEvent]);
+      if (error) {
+        console.error(error);
+        alert("일정 저장에 실패했습니다. Supabase 설정을 확인해 주세요.");
+        return;
+      }
+
       titleInput.value = "";
       ownerInput.value = "";
       deleteCodeInput.value = "";
@@ -723,40 +714,45 @@
         input.checked = false;
         input.disabled = false;
       });
-      renderCalendar();
-      renderList();
-      renderSummary();
+      await refreshAll();
     };
 
-    const deleteEvent = (id) => {
-      const events = loadEvents();
-      const target = events.find(e => e.id === id);
-      if (!target) return;
+    const deleteEvent = async (id) => {
       const input = prompt("등록 시 설정한 삭제 비밀번호를 입력하세요.");
-      if (input !== target.deleteCode) {
+      if (input === null) return;
+
+      const { data, error } = await supabaseClient.rpc("delete_event", {
+        p_id: id,
+        p_delete_code: input
+      });
+
+      if (error) {
+        console.error(error);
+        alert("삭제 처리 중 오류가 발생했습니다.");
+        return;
+      }
+
+      if (!data) {
         alert("비밀번호가 일치하지 않습니다.");
         return;
       }
-      const next = events.filter(e => e.id !== id);
-      saveEvents(next);
-      renderCalendar();
-      renderList();
-      renderSummary();
+
+      await refreshAll();
     };
 
     document.getElementById("addBtn").addEventListener("click", addEvent);
-    document.getElementById("prevMonth").addEventListener("click", () => {
+    document.getElementById("prevMonth").addEventListener("click", async () => {
       current.setMonth(current.getMonth() - 1);
-      renderCalendar();
+      await refreshAll();
     });
-    document.getElementById("nextMonth").addEventListener("click", () => {
+    document.getElementById("nextMonth").addEventListener("click", async () => {
       current.setMonth(current.getMonth() + 1);
-      renderCalendar();
+      await refreshAll();
     });
-    document.getElementById("todayBtn").addEventListener("click", () => {
+    document.getElementById("todayBtn").addEventListener("click", async () => {
       current = new Date();
       current.setDate(1);
-      renderCalendar();
+      await refreshAll();
     });
 
     document.getElementById("downloadBtn").addEventListener("click", async () => {
@@ -777,14 +773,13 @@
       }
     });
 
-    document.getElementById("printBtn").addEventListener("click", () => {
-      window.print();
-    });
+    document.getElementById("printBtn").addEventListener("click", () => window.print());
 
-    migrateStorage();
-    renderCalendar();
-    renderList();
-    renderSummary();
+    (async () => {
+      await refreshAll();
+      // 다른 PC에서 등록한 일정도 약 10초마다 자동으로 반영합니다.
+      setInterval(refreshAll, 10000);
+    })();
   </script>
 </body>
 </html>
